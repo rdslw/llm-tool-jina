@@ -1,6 +1,6 @@
 [project]
 name = "llm-tool-jina"
-version = "0.1.0"
+version = "0.1.1"
 description = "Jina Reader tools (read a URL, search the web) for Simon Willison's LLM"
 readme = "README.md"
 authors = [
