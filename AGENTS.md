@@ -48,14 +48,21 @@
 
 ## Releasing
 
-- Finish, push and verify the feature and fix commits first (CI green).
-- Run `uv lock --upgrade` and `uv run pytest` before the version change.
-  `uv.lock` stays untracked.
-- Release commit `Release vX.Y.Z` that changes only `version` in
-  `pyproject.toml`; annotated tag `git tag -a vX.Y.Z -m "Release vX.Y.Z"
-  -m "<notes>"`; then `git push --follow-tags`. The tag push starts
-  `publish.yml` (tag check, tests, PyPI, GitHub release). Do not run
-  `gh release create`.
-- Keep PyPI publication and the GitHub release in `publish.yml`, and do not
-  rename it: the PyPI trusted publisher is bound to the file name.
-- Each `git push` needs a YubiKey touch by the user: say so before the push.
+- Commit `bump: vX.Y.Z` (only `version` in `pyproject.toml`, no body).
+  Annotated tag `vX.Y.Z`: subject `release: vX.Y.Z`, blank line, release
+  notes in Markdown. The GitHub release shows the tag notes unchanged.
+  `tag-check` in `publish.yml` refuses any other form.
+- On a bump request: `uv lock --upgrade` and `uv run pytest`; read
+  `git log` and `git diff` since the previous tag; write the notes to
+  `$TMPDIR/release-notes-vX.Y.Z.md` (sections, empty ones omitted: Breaking
+  changes, Features, Fixes, Other, Commits as `- subject (hash)`, then the
+  compare link `.../compare/vPREV...vX.Y.Z`); show them to the user and wait
+  for approval; then commit and
+  `git tag -a vX.Y.Z --cleanup=verbatim -F <notes>` (without verbatim, git
+  removes the `#` headings).
+- The user pushes (`git push --follow-tags`, YubiKey touch): never push
+  without an explicit request.
+- Failure before the PyPI upload: save the notes, delete the tag (remote and
+  local), fix, tag again. After the upload: re-run only the `release` job.
+- Do not run `gh release create`; do not rename `publish.yml` (the PyPI
+  trusted publisher is bound to it). README has the details.

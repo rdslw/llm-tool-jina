@@ -3,6 +3,12 @@ name: Publish to PyPI
 # An annotated tag vX.Y.Z, pushed with `git push --follow-tags`, starts this
 # workflow: tag check, tests, PyPI publication, GitHub release. Only git is
 # necessary on the local machine; no gh and no token with write access.
+# Two names: the version commit (pyproject.toml only) is "bump: vX.Y.Z"; the
+# tag on it is vX.Y.Z, and its message is "release: vX.Y.Z" + notes. This
+# workflow checks only the tag, not the commit subject.
+# Tag message: subject "release: vX.Y.Z", then a blank line, then the release
+# notes in Markdown. The GitHub release shows the notes without changes.
+# Make the tag with --cleanup=verbatim: by default git tag removes "#" lines.
 # One workflow on purpose: a release made with the workflow token starts no
 # other workflow, so a separate `on: release` publisher would never run.
 # The PyPI trusted publisher is bound to this file name and environment `pypi`:
@@ -40,7 +46,23 @@ jobs:
             exit 1
           fi
           if [ "$(git cat-file -t "refs/tags/$tag")" != "tag" ]; then
-            echo "::error::Tag $tag is a lightweight tag. Use: git tag -a $tag -m \"Release $tag\" -m \"<notes>\""
+            echo "::error::Tag $tag is a lightweight tag. Use: git tag -a $tag --cleanup=verbatim -F notes.md"
+            exit 1
+          fi
+          subject=$(git tag -l --format='%(contents:subject)' "$tag")
+          if [ "$subject" != "release: $tag" ]; then
+            echo "::error::Tag message subject is '$subject', not 'release: $tag'"
+            exit 1
+          fi
+          notes=$(git tag -l --format='%(contents:body)' "$tag")
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "::error::Tag message of $tag has no release notes after the subject line"
+            exit 1
+          fi
+          # The notes template always has headings ("## Commits"). Without
+          # --cleanup=verbatim, git tag removed them.
+          if ! printf '%s\n' "$notes" | grep -q '^#'; then
+            echo "::error::Release notes of $tag have no Markdown heading. Make the tag with: git tag -a $tag --cleanup=verbatim -F notes.md"
             exit 1
           fi
           if [ "$tag" != "v$version" ]; then
@@ -51,7 +73,7 @@ jobs:
             echo "::error::The commit of $tag is not on master"
             exit 1
           fi
-          echo "Tag $tag: annotated, equal to the pyproject.toml version, on master"
+          echo "Tag $tag: annotated, subject and notes present, equal to the pyproject.toml version, on master"
 
   # The same jobs as CI, for the tagged commit, on the built wheel.
   test:
@@ -98,33 +120,18 @@ jobs:
     permissions:
       contents: write  # gh release create; only this job
     steps:
-      # Full history and tags, to find the previous tag for the notes.
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Fetch the tag object
         run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
 
-      # Notes: body of the tag message, subjects of the commits since the
-      # previous release tag (without the "Release vX.Y.Z" commit), compare link.
+      # Notes: the body of the tag message (everything after the subject
+      # "release: vX.Y.Z"), without changes. tag-check made sure it exists.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="$GITHUB_REF_NAME"
-          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$tag^" 2>/dev/null || true)
-          if [ -n "$prev" ]; then range="$prev..$tag"; else range="$tag"; fi
-          {
-            git tag -l --format='%(contents:body)' "$tag"
-            echo
-            echo "## Commits"
-            echo
-            git log --no-merges --format='- %s' "$range" | grep -v -E '^- Release v[0-9]+\.[0-9]+\.[0-9]+$' || true
-            if [ -n "$prev" ]; then
-              echo
-              echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$tag"
-            fi
-          } > notes.md
+          git tag -l --format='%(contents:body)' "$tag" > notes.md
           cat notes.md
           gh release create "$tag" --verify-tag --title "$tag" --notes-file notes.md

@@ -285,44 +285,60 @@ finds new `llm` releases that break the plugin.
 
 A pushed annotated tag `vX.Y.Z` starts `.github/workflows/publish.yml`:
 
-1. `tag-check`: the tag is annotated, has the form `vX.Y.Z`, equals
-   `v` + the `pyproject.toml` version, and its commit is on `master`.
+1. `tag-check`: the tag is annotated, has the form `vX.Y.Z`, its message
+   subject is `release: vX.Y.Z` and release notes follow, it equals `v` + the
+   `pyproject.toml` version, and its commit is on `master`.
 2. Tests (same jobs as CI).
 3. `publish`: `uv build`, check of the wheel name, PyPI Trusted Publishing.
-4. `release`: GitHub release with the workflow token. Notes: body of the tag
-   message, subjects of the commits since the previous tag, compare link.
+4. `release`: GitHub release with the workflow token. The release notes are
+   the body of the tag message, without changes.
 
 No local `gh` or GitHub token with write access is necessary: only `git push`.
 The release must stay in `publish.yml`: a release made with the workflow token
 starts no other workflow.
 
-Procedure:
+Formats:
+
+- Version commit: `bump: vX.Y.Z`, changes only `version` in `pyproject.toml`.
+- Tag `vX.Y.Z`, annotated. Message: subject `release: vX.Y.Z`, a blank line,
+  then the release notes in Markdown since the previous release (breaking
+  changes, features, fixes, other, commits as `- subject (hash)`, compare
+  link `.../compare/vPREV...vX.Y.Z`; empty sections omitted).
+
+Procedure (the agent prepares steps 1-4 when you ask for a bump; you review
+the notes and push):
 
 1. Finish and push the feature and fix commits; CI must pass.
 2. Test with the newest allowed dependencies: `uv lock --upgrade`, then
    `uv run pytest`.
-3. Set `version` in `pyproject.toml` (`X.Y.Z`, no `v`). PyPI versions are
-   immutable.
-4. Commit and tag (the second `-m` is the release notes):
+3. Write the release notes to a file, for example `notes.md`. Its first line
+   is `release: vX.Y.Z`, then a blank line.
+4. Set `version` in `pyproject.toml` (`X.Y.Z`, no `v`; PyPI versions are
+   immutable), commit, tag:
 
    ```bash
    git add pyproject.toml
-   git commit -m "Release v0.1.0"
-   git tag -a v0.1.0 -m "Release v0.1.0" -m "First release: read and search tools."
-   git push --follow-tags
+   git commit -m "bump: v0.2.0"
+   git tag -a v0.2.0 --cleanup=verbatim -F notes.md
    ```
 
-   `--follow-tags` pushes the branch and its new annotated tags with one fixed
-   command. It skips lightweight tags, and `tag-check` refuses them.
+   `--cleanup=verbatim` is necessary: by default `git tag` removes every line
+   that starts with `#`, so the Markdown headings would be lost.
+5. Push: `git push --follow-tags`. It pushes the branch and its new
+   annotated tags with one fixed command. It skips lightweight tags, and
+   `tag-check` refuses them.
 
-If the workflow fails before the PyPI upload, delete the tag, fix, tag again:
+If the workflow fails before the PyPI upload, keep the notes, delete the tag,
+fix, and tag again:
 
 ```bash
-git push origin :refs/tags/v0.1.0
-git tag -d v0.1.0
+git tag -l --format='%(contents)' v0.2.0 > notes.md
+git push origin :refs/tags/v0.2.0
+git tag -d v0.2.0
 ```
 
-If only the `release` job fails, run it again in GitHub Actions.
+If only the `release` job fails, run it again in GitHub Actions. To correct
+the notes of a published release, edit the release on GitHub.
 
 One-time setup:
 
