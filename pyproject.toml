@@ -1,0 +1,57 @@
+[project]
+name = "llm-tool-jina"
+version = "0.1.0"
+description = "Jina Reader tools (read a URL, search the web) for Simon Willison's LLM"
+readme = "README.md"
+authors = [
+    {name = "Radoslaw Stachowiak"},
+]
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["llm", "llm-plugin", "jina", "reader", "web-search", "scraping"]
+dependencies = [
+    "llm>=0.32.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/rdslw/llm-tool-jina"
+Changelog = "https://github.com/rdslw/llm-tool-jina/releases"
+Issues = "https://github.com/rdslw/llm-tool-jina/issues"
+CI = "https://github.com/rdslw/llm-tool-jina/actions"
+
+# The entry point name must be unique among installed llm plugins: pluggy
+# skips a second plugin with the same name and gives no message. The
+# third-party package llm-jina already uses the name "jina".
+[project.entry-points.llm]
+tool_jina = "llm_tool_jina"
+
+[dependency-groups]
+# The lower bound keeps the lowest-direct CI job from selecting an old pytest.
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+default-groups = ["dev"]
+# Supply-chain guard: no package release newer than this enters a resolution.
+exclude-newer = "34 hours"
+# Rebuild the installed wheel when these files change. The default is only
+# pyproject.toml, so a non-editable install (UV_NO_EDITABLE=1) kept testing
+# an old llm_tool_jina.py.
+cache-keys = [{file = "pyproject.toml"}, {file = "llm_tool_jina.py"}, {file = "README.md"}]
+
+[tool.hatch.build.targets.wheel]
+py-modules = ["llm_tool_jina"]
+
+[tool.hatch.build.targets.sdist]
+include = ["llm_tool_jina.py", "tests/", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: sends real requests to Jina; runs only with JINA_LIVE_TESTS=1",
+]

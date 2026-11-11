@@ -1,0 +1,97 @@
+name: Test
+
+# Tags are not a trigger: a release tag points at a commit already tested on
+# master, and publish.yml calls this workflow (workflow_call) again for the
+# tagged commit before publication. PR branches are covered by pull_request.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+  # GitHub disables schedules after about 60 days without commits. Check the
+  # state and enable again (both commands are idempotent):
+  #   gh workflow list --all      # State column: disabled_inactivity
+  #   gh workflow enable test.yml
+  schedule:
+    - cron: "17 6 2 * *"  # monthly: find new llm releases that break the plugin
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Install the built wheel, not an editable install, so that a file missing
+    # from the wheel fails here. Set for the full job, not as a flag on
+    # uv sync: without it, `uv run` installs the project as editable again
+    # and gives no message.
+    env:
+      UV_NO_EDITABLE: "1"
+      UV_PYTHON: ${{ matrix.python-version }}
+    strategy:
+      fail-fast: false  # run all jobs: show each Python version that breaks
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # setup-uv publishes no major tags since v8: pin the full version.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      # uv.lock is not committed: dependencies resolve again on each run, so
+      # CI fails when a new llm release breaks the plugin.
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Run tests
+        run: uv run pytest
+
+  # The lowest versions of the direct dependencies that pyproject.toml allows
+  # (llm, pytest), on the oldest supported Python. Transitive dependencies
+  # resolve to their newest versions.
+  # Why: pip and uv do not upgrade an installed dependency that already
+  # satisfies the lower bound, so users can run the plugin on llm 0.32.1. The
+  # job above tests only the newest versions and cannot find code that uses
+  # an API newer than a lower bound.
+  test-lowest:
+    runs-on: ubuntu-latest
+    # Set for the full job: without UV_RESOLUTION, `uv run` resolves again
+    # with the newest versions and gives no message.
+    env:
+      UV_NO_EDITABLE: "1"
+      UV_RESOLUTION: lowest-direct
+      UV_PYTHON: "3.11"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+
+      - name: Install lowest direct dependencies
+        run: uv sync --all-groups
+
+      - name: Show resolved versions
+        run: uv pip list | grep -E '^(llm|pytest) '
+
+      - name: Run tests
+        run: uv run pytest

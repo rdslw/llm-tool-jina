@@ -1,0 +1,130 @@
+name: Publish to PyPI
+
+# An annotated tag vX.Y.Z, pushed with `git push --follow-tags`, starts this
+# workflow: tag check, tests, PyPI publication, GitHub release. Only git is
+# necessary on the local machine; no gh and no token with write access.
+# One workflow on purpose: a release made with the workflow token starts no
+# other workflow, so a separate `on: release` publisher would never run.
+# The PyPI trusted publisher is bound to this file name and environment `pypi`:
+# do not rename the file.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  # Fails before the tests if the tag is wrong; otherwise a missed version
+  # change fails only at the upload, after all tests.
+  tag-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # origin/master for the ancestor check
+
+      # actions/checkout can create the pushed tag as a lightweight ref to the
+      # commit. Fetch the tag object again, so that git sees the annotation.
+      - name: Fetch the tag object
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      # GITHUB_REF_NAME in the shell, not ${{ }} in the script: no script
+      # injection through the tag name.
+      - name: Check the tag
+        run: |
+          tag="$GITHUB_REF_NAME"
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $tag is not vX.Y.Z"
+            exit 1
+          fi
+          if [ "$(git cat-file -t "refs/tags/$tag")" != "tag" ]; then
+            echo "::error::Tag $tag is a lightweight tag. Use: git tag -a $tag -m \"Release $tag\" -m \"<notes>\""
+            exit 1
+          fi
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::Tag $tag is not v + the pyproject.toml version ($version)"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$tag^{commit}" origin/master; then
+            echo "::error::The commit of $tag is not on master"
+            exit 1
+          fi
+          echo "Tag $tag: annotated, equal to the pyproject.toml version, on master"
+
+  # The same jobs as CI, for the tagged commit, on the built wheel.
+  test:
+    needs: [tag-check]
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [test]
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write  # PyPI Trusted Publishing; only this job
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No cache in the job that uploads to PyPI (cache poisoning). The
+      # setup-uv default "auto" already skips tag pushes; "false" keeps the
+      # cache off if the trigger changes.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Build
+        run: uv build
+
+      # The wheel name proves again that the tag equals the built version.
+      - name: Check built version is the tag
+        run: |
+          ls "dist/llm_tool_jina-${GITHUB_REF_NAME#v}-py3-none-any.whl" \
+            || { echo "::error::Built version is not ${GITHUB_REF_NAME#v}"; exit 1; }
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [publish]
+    permissions:
+      contents: write  # gh release create; only this job
+    steps:
+      # Full history and tags, to find the previous tag for the notes.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the tag object
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      # Notes: body of the tag message, subjects of the commits since the
+      # previous release tag (without the "Release vX.Y.Z" commit), compare link.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "$tag^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then range="$prev..$tag"; else range="$tag"; fi
+          {
+            git tag -l --format='%(contents:body)' "$tag"
+            echo
+            echo "## Commits"
+            echo
+            git log --no-merges --format='- %s' "$range" | grep -v -E '^- Release v[0-9]+\.[0-9]+\.[0-9]+$' || true
+            if [ -n "$prev" ]; then
+              echo
+              echo "**Full Changelog**: https://github.com/$GITHUB_REPOSITORY/compare/$prev...$tag"
+            fi
+          } > notes.md
+          cat notes.md
+          gh release create "$tag" --verify-tag --title "$tag" --notes-file notes.md
